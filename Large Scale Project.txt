@@ -1,0 +1,371 @@
+#define INSTWRITE_EN		0x08
+#define DATAWRITE			0x0D
+#define DATAWRITE_EN		0x09
+#define HIGHNIBBLE			0xF0
+#define LOWNIBBLE			4
+#define CHARSIZE			20
+#define ON					0		//To turn led on,The led in water filler turn on in low input
+#define OFF					1		//to turn led off
+
+//------------------------------Global Variables---------------------------------------------------
+int height =0;
+int value_us1;
+int time_low_us1,time_high_us1;
+int radius = 0;
+int value_us2;
+int time_low_us2,time_high_us2;
+unsigned int volume = 0;
+unsigned int time = 0;
+float flowRate = 00009463;
+char secondTimer=0;
+char print1[CHARSIZE]={"FILLING WATER"};
+char print2[CHARSIZE]={"YOU SAVED OUR PLANET"};
+char index=0;
+
+//------------------------------------------Functions---------------------------------------------
+/*--- set_osci_4MHZ ---------------------------------------------------------------------------
+Author: 	SRaj
+Date: 		16 FEB 2020
+Modified: 	Name or None
+Desc: 		Set oscillator 4MHZ
+Input: 		None
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+void set_osci_4MHZ(void)
+{
+	OSCCON = 0x52; 
+	OSCCON2 = 0x04; 
+	OSCTUNE = 0x80; 
+} // eo set_osci_4MHZ
+
+/*--- set_serialPort ---------------------------------------------------------------------------
+Author:		SRaj
+Date: 		16 FEB 2020
+Modified: 	Name or None
+Desc: 		Serial port configuration
+Input:		None
+Returns: 	None
+--------------------------------------------------------------------------------------------*/
+void set_serialPort(void)
+{
+	SPBRG1=25;
+	TXSTA1=0x26;
+	RCSTA1=0x90;
+	BAUDCON1=0x40;
+}// eo set_serialPort
+
+/*--- portConfig ---------------------------------------------------------------------------
+Author: 	SRaj
+Date: 		16 FEB 2020
+Modified: 	Name or None
+Desc: 		Port configuration
+Input: 		None
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+void portConfig(void)
+{
+	LATA=0x0C;
+	ANSELA=0x00;
+	TRISA=0xF3;
+
+	LATB=0x00;
+	ANSELB=0x00;
+	TRISB=0xCF;
+	
+	LATD=0x02;
+	ANSELD=0x00;
+	TRISD=0xFC;
+	
+	LATC = 0x00;				//Set Outut voltage
+	ANSELC = 0x00;				//Digital
+	TRISCbits.RC0 = 0;
+	SCL = 1;					//Set as input
+	SDA = 1;					//Set as input
+	SSPADD = 9;					//100 KHz I2C Clock with Fosc = 4Mhz [Fosc/(4*(SSPADD + 1))]
+	SSPCON1 = 0x28;				//Enable I2C
+	
+} // eo portConfig
+
+/*--- timerConfig ----------------------------------------------------------+-----------------
+Author: 	SRaj
+Date: 		01 APR 2020
+Modified: 	Name or None
+Desc: 		Timer configuration for 1 second
+Input: 		None
+Returns: 	None
+--------------------------------------------------------------------------------------------*/
+void timerConfig(void)
+{
+	T0CON=0x91;
+	TMR0H=0x0B;
+	TMR0L=0xDC;
+	T0FLAG=FALSE;
+} // eo timerConfig
+
+/*--- ResetTimer ---------------------------------------------------------------------------
+Author: 	SRaj
+Date: 		01/04/2020
+Modified: 	Name or None
+Desc: 		Resetting timer configuration
+Input: 		None
+Returns: 	None
+--------------------------------------------------------------------------------------------*/
+void resetTimer(void)
+{
+	TMR0H=0x0B;
+	TMR0L=0xDC;
+	T0FLAG=FALSE;
+} // eo resetTimer
+
+/*--- i2c_init ---------------------------------------------------------------------------
+Author:		SRaj
+Date:		03 APR 2020
+Modified:	None
+Desc:		Initalizes the i2c start condition
+Input: 		None
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+void i2c_init(void)
+{
+	I2CSTART = 1;				//initiate Start condition
+	while(I2CSTART);			//Wait
+	I2CFLAG = 0;				//clear SSPIF interrupt flag
+}
+//eo i2c_init
+
+/*--- delay_i2c ---------------------------------------------------------------------------
+Author:		SRaj
+Date:		03 APR 2020
+Modified:	None
+Desc:		Delay 4 us to latch the data in enable pin
+Input: 		addr
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+
+void delay_i2c(void)
+{
+	int i=0;
+	for(i=0;i<LIMIT;i++)
+		Nop();
+}
+//eo delay_i2c
+
+/*--- i2c_write ---------------------------------------------------------------------------
+Author:		SRaj
+Date:		03 APR 2020
+Modified:	None
+Desc:		write byte via i2c bus
+Input: 		addr
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+void i2c_write(char addr)
+{
+	SSPBUF = addr;				//LCD Slave address with write
+	while(!I2CFLAG);			//Wait upto 9th clock pulse
+	I2CFLAG = 0;				//clear SSPIF interrupt flag
+	if(I2CACK)					//ACK was not received
+	{
+		I2CSTOP = 1;			//initiate stop condition
+		while(I2CSTOP);			//Wait
+		return;					//Stop the program
+	}
+}
+//eo i2c_write
+
+/*--- lcd_cmd_write ---------------------------------------------------------------------------
+Author:		SRaj
+Date:		03 APR 2020
+Modified:	None
+Desc:		write command byte via i2c bus
+Input: 		data
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+void lcd_write(char data, char write, char write_en)
+{
+	i2c_write((data&HIGHNIBBLE) | write);
+	Delay1KTCYx(2);
+	i2c_write(write_en);
+	i2c_write((data<<LOWNIBBLE) | write);
+	Delay1KTCYx(2);
+	i2c_write(write_en);
+}
+//eo lcd_cmd_write
+
+/*--- i2c_stop ---------------------------------------------------------------------------
+Author:		SRaj
+Date:		03 APR 2020
+Modified:	None
+Desc:		write command byte via i2c bus
+Input: 		data
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+void i2c_stop(void)
+{
+	I2CSTOP = 1;				//initiate Start condition
+	while(I2CSTOP);				//Wait
+}
+//eo i2c_stop
+
+/*---lcd_printing--------------------------------------------------------------------------
+Author:		SRaj
+Date:		03 APR 2020
+Modified:	None
+Desc:		lcd printing function
+Input: 		None
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+void lcd_printing(void)
+{
+	i2c_init();									// Initial LCD	
+	i2c_write(0x4E);							//Slave address(LCD) with write condition
+	lcd_write(0x20,INSTWRITE,INSTWRITE_EN);		//DL-4bit,1 line display,5x8 dots
+	lcd_write(0x01,INSTWRITE,INSTWRITE_EN);		//clear display
+	lcd_write(0x0E,INSTWRITE,INSTWRITE_EN);		//display and cursor ON
+	lcd_write(0x1C,INSTWRITE,INSTWRITE_EN);		//shift cursor right
+	lcd_write(0x02,INSTWRITE,INSTWRITE_EN);		//home position
+}
+
+/*---message1--------------------------------------------------------------------------
+Author:		SRaj
+Date:		03 APR 2020
+Modified:	None
+Desc:		Filling water message
+Input: 		None
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+void message1(void)
+{
+	lcd_printing();
+	for(index=0;index<CHARSIZE;index++)
+	{
+	lcd_write(print2[index],DATAWRITE,DATAWRITE_EN);		//Display message 1
+	}
+}
+//eo message1
+
+/*---message2--------------------------------------------------------------------------
+Author:		SRaj
+Date:		03 APR 2020
+Modified:	None
+Desc:		Message after filling water
+Input: 		None
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+
+void message2(void)
+{
+	lcd_printing();
+	for(index=0;index<CHARSIZE;index++)
+	{
+	lcd_write(print2[index],DATAWRITE,DATAWRITE_EN);		//Display message 2
+	}
+}
+//eo message2
+
+/*--- initializefunc ---------------------------------------------------------------------------
+Author:		SRaj
+Date:		07 MAR 2020
+Modified:	None
+Desc:		Initalizes the overall System.
+Input: 		None
+Returns:	None
+--------------------------------------------------------------------------------------------*/
+void initializefunc(void)
+{
+	set_osci_4MHZ();
+	set_serialPort();
+	portConfig();
+} //eo initializefunc
+
+/*----------------------- MAIN FUNCTION --------------------------------------------------------------------------------------------------------------------------------------------------------*/
+void main(void)
+{	
+	initializefunc();
+	while(1)				
+	{	
+	
+		T3CON = 0x06;			//initializing timer0
+		TMR3H= 0;
+		TMR3L= 0;
+		T1CON = 0x06;			//initializing timer1
+		TMR1H= 0;
+		TMR1L= 0;
+
+		//------------------------radius calculation---------------------------------------
+
+		PORTBbits.RB4=1; 			//trig high for ultrasonic2
+		Delay1KTCYx(0.0001); 		//10micro sec delay
+		PORTBbits.RB4=0;			//trig low for ultrasonic2
+		while(PORTAbits.RA1 == 0); 	//wait for echo of ultrasonic2	
+		T1CON = 0x07;				//timer starts
+		while(PORTAbits.RA1 == 1); 	//waiting stops of ultrasonic2
+		T1CON = 0x06;				//timer stops
+		time_low_us2=TMR1L;
+		time_high_us2=TMR1H;
+		value_us2 = time_low_us2;
+		value_us2|=(time_high_us2<<8);
+		value_us2/=58.82;	
+		radius= 23;		     		 //width of the filling station is 46cm, centre is at 23cm
+		radius-=value_us2;
+		
+
+		//------------------------height calculation---------------------------------------
+		PORTBbits.RB5=1; 			//trig high for ultrasonic1
+		Delay1KTCYx(0.0001); 		//10micro sec eeeer	SEDGG
+		PORTBbits.RB5=0; 			//trig low for ultrasonic1
+		while(PORTAbits.RA0 == 0); 	//wait for echo of ultrasonic1
+		T3CON = 0x07;				//timer starts
+		while(PORTAbits.RA0 == 1); 	//waiting stops f ultrasonic1
+		T3CON = 0x06;				//timer stops
+		time_low_us1=TMR3L;
+		time_high_us1=TMR3H;
+		value_us1 = time_low_us1;
+		value_us1|=(time_high_us1<<8);
+		value_us1/=58.82;  
+		height= 30;					//Total height of filling station is 30 cm
+		height-=value_us1;
+		
+			
+		//------------------------volume calculation---------------------------------------
+		
+		volume=height*radius*radius*PI;
+		printf("\033[1;1HINTELLECT ELECTRONICS");
+		printf("\033[3;2HVolume=\033[K");
+				
+		//---------------------Time calculation--------------------------------------------
+	
+		time = volume;
+		time/= flowRate;
+		printf("\033[4;2HTime=\033[K");
+	
+		
+		//----------------------LEDs for flow indication for time calculated------------------
+		IRSLED=OFF;;
+		if(IRS==TRUE)			//Bottle detection by IR sensor
+		{	
+			IRSLED=ON;
+			if(time)
+			{
+				timerConfig();
+				if(T0FLAG)
+				{
+					resetTimer();
+					if(secondTimer<time)
+					{	
+						message1();
+						printf("\033[3;2HVolume= %d\n",volume);
+						printf("\033[4;2HTime= %d\n",time);
+						secondTimer++;
+						LED_RUN = ON;		//water flows
+						LED_STOP = OFF;
+					}
+					else
+					{	message2();
+						secondTimer = 0;
+						LED_STOP = ON;
+						LED_RUN = OFF;
+					}
+				}
+			}
+		}//eo if
+	}//eo while
